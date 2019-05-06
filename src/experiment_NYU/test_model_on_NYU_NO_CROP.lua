@@ -7,38 +7,16 @@ require 'measure'
 local network_input_height = 240
 local network_input_width = 320
 
-local function visualize_mask(mask, filename)
-    local _mask_img = mask:clone()
-    image.save(filename, _mask_img:double()) 
-    print("Done saving to ", filename)
-end
-
-local function visualize_depth(z, filename)
-    local _z_img = z:clone()
-    _z_img = _z_img:add( - torch.min(_z_img) )
-    _z_img = _z_img:div( torch.max(_z_img) )
-    image.save(filename, _z_img) 
-    print("Done saving to ", filename)
-end
-
-local function visualize_normal(normal, filename)
-    local _normal_img = normal:clone()
-    _normal_img:add(1)
-    _normal_img:mul(0.5)
-    image.save(filename, _normal_img) 
-
-    print("Done saving to ", filename)
-end
-
 local function _read_data_handle( _filename )        
     -- the file is a csv file
-    local csv_file_handle = csvigo.load({path = _filename, mode = 'large'})
-    
-    local _n_lines = #csv_file_handle - 1;  -- minus 1 because the first line is invalid
-
+	lines = {}
+	for line in io.lines(_filename) do 
+		lines[#lines + 1] = line
+	end    
+	local _n_lines = #lines;  -- minus 1 because the first line is invalid
 
     local _data ={}
-    local _line_idx = 2 --skip the first line
+    local _line_idx = 1 --skip the first line
     local _sample_idx = 0
     while _line_idx <= _n_lines do
 
@@ -46,42 +24,8 @@ local function _read_data_handle( _filename )
         
 
         _data[_sample_idx] = {};
-        _data[_sample_idx].img_filename = csv_file_handle[ _line_idx ][ 1 ]    
-        _data[_sample_idx].n_point = tonumber(csv_file_handle[ _line_idx ][ 3 ])
-
-
-
-        _data[_sample_idx].y_A = {}
-        _data[_sample_idx].y_B = {}
-        _data[_sample_idx].x_A = {}
-        _data[_sample_idx].x_B = {}
-        _data[_sample_idx].ordianl_relation = {}       
-        
-        --print(string.format('n_point = %d',_data[_sample_idx].n_point ))        
-        --io.read()
-
+        _data[_sample_idx].img_filename = lines[ _line_idx ]
         _line_idx = _line_idx + 1 
-        for point_idx = 1 , _data[_sample_idx].n_point do
-            
-            _data[_sample_idx].y_A[point_idx] = tonumber(csv_file_handle[ _line_idx ][ 1 ])
-            _data[_sample_idx].x_A[point_idx] = tonumber(csv_file_handle[ _line_idx ][ 2 ])
-            _data[_sample_idx].y_B[point_idx] = tonumber(csv_file_handle[ _line_idx ][ 3 ])
-            _data[_sample_idx].x_B[point_idx] = tonumber(csv_file_handle[ _line_idx ][ 4 ])
-
-             -- Important!
-            if csv_file_handle[ _line_idx ][ 5 ] == '>' then
-                _data[_sample_idx].ordianl_relation[point_idx] = 1;
-            elseif csv_file_handle[ _line_idx ][ 5 ] == '<' then
-                _data[_sample_idx].ordianl_relation[point_idx] = -1;    
-            elseif csv_file_handle[_line_idx][ 5 ] == '=' then        -- important!
-                _data[_sample_idx].ordianl_relation[point_idx] = 0;
-            end
-
-            --print(string.format('%d, %d, %d, %d, %d',_data[_sample_idx].y_A[point_idx], _data[_sample_idx].x_A[point_idx], _data[_sample_idx].y_B[point_idx], _data[_sample_idx].x_B[point_idx],_data[_sample_idx].ordianl_relation[point_idx]))
-            --io.read()
-
-            _line_idx = _line_idx + 1 
-        end                 
 
         --print(string.format('line_idx = %d',_line_idx))
         --io.read()
@@ -612,14 +556,11 @@ cmd_params = cmd:parse(arg)
 
 
 if cmd_params.mode == 'test' then
-    csv_file_name = '../../data/' .. cmd_params.test_set       -- test set
+    csv_file_name = cmd_params.test_set       -- test set
 elseif cmd_params.mode == 'validate' then
     csv_file_name = '../../data/' .. cmd_params.valid_set        -- validation set 1001 images       
 end
-preload_t7_filename = string.gsub(csv_file_name, "csv", "t7")
-
-
-
+preload_t7_filename = string.gsub(csv_file_name, "txt", "t7")
 
 f=io.open(preload_t7_filename,"r")
 if f == nil then
@@ -733,7 +674,13 @@ for i = 1, n_iter do
     local img = image.load(data_handle[i].img_filename)
     local img_orig_h = img:size(2)
     local img_orig_w = img:size(3)
-    _batch_input_cpu[{1,{}}]:copy( image.scale(img,network_input_width ,network_input_height))
+    img = image.scale(img,network_input_width ,network_input_height)
+    trimmed = torch.Tensor(3, network_input_height, network_input_width)
+    trimmed[{1, {}}]:copy(img[{1, {}}])
+    trimmed[{2, {}}]:copy(img[{2, {}}])
+    trimmed[{3, {}}]:copy(img[{3, {}}])
+    _batch_input_cpu[{1,{}}]:copy(trimmed)
+    image.save('trimmed.jpg', trimmed)
     
     -- test data        
     local _single_data = {};
@@ -771,61 +718,6 @@ for i = 1, n_iter do
     ---------------------------------------------------------------------------------------------------
     --image.scale(src, width, height, [mode])    Scale it to the original size!
     orig_size_pred_z:copy( image.scale(network_output[{1,1,{}}]:double(), img_orig_w, img_orig_h) ) 
-    _evaluate_WKDR(orig_size_pred_z, _single_data[1], WKDR[{i,{}}], WKDR_eq[{i,{}}], WKDR_neq[{i,{}}]);
-
-
-    ---------------------------------------------------------------------------------------------------
-                        -- Load the ground truth depth values
-    ---------------------------------------------------------------------------------------------------
-    if cmd_params.mode == 'test' then
-
-        local gtz = load_hdf5_z(string.gsub(data_handle[i].img_filename, '.png', '_gt_depth.h5'), 'gt_depth')
-        assert(gtz:size(1) == 480)
-        assert(gtz:size(2) == 640)
-        
-
-        if img_orig_h ~= 480 then
-            orig_size_pred_z = image.scale( network_output[{1,1,{}}]:double(), 640, 480  )  
-            orig_size_normal =  image.scale( normal_image:double(), 640, 480  ) 
-        end
-        
-        
-        ---------------------------------------------------------------------------------------------------
-        -- metric error
-        ---------------------------------------------------------------------------------------------------
-        -- evaluate the data at the cropped area        
-        local _crop = 16
-        local gtz_cropped = gtz:sub(45,471,41,601)
-        local orig_size_pred_z_cropped = orig_size_pred_z:sub(45,471,41,601)        
-        -- evaluate
-        local norm_orig_size_pred_z_crop = normalize_output_depth_with_NYU_mean_std( orig_size_pred_z_cropped )
-        fmse[i], fmselog[i], flsi[i], fabsrel[i], fsqrrel[i] = metric_error(gtz_cropped, norm_orig_size_pred_z_crop)
-        fmse_si_img[i] = img_scale_invariant_error(gtz_cropped, orig_size_pred_z_cropped)
-        if cmd_params.si_obj_err then
-            if cmd_params.model == 'chen' then
-                local _normed = normalize_output_depth_with_NYU_mean_std( orig_size_pred_z )
-                fmse_si_obj[i] = object_scale_invariant_error(gtz, _normed, data_handle[i].img_filename)
-            elseif cmd_params.model == 'ours' then
-                fmse_si_obj[i] = object_scale_invariant_error(gtz, orig_size_pred_z, data_handle[i].img_filename)
-            end
-        else
-           fmse_si_obj[i] = 0 
-        end
-       
-        ---------------------------------------------------------------------------------------------------
-        -- Normal error
-        ---------------------------------------------------------------------------------------------------
-        -- read the groundtruth normal map            bug here when the name of the test image is not the same as i !!!!!!!!!!!1
-        local gt_normal, gt_mask = read_NYU_gt_normal_and_mask(i, cmd_params.mode) 
-
-        n_pixels[i] = gt_mask:sum()
-        local messy = torch.Tensor(1, 3, 480, 640)
-        messy[{1,{}}]:copy(orig_size_normal)
-        measures['normal'][i] = measure_normal(messy, gt_normal, gt_mask)
-        -- print(measures['normal'][i])
-    end
-
-
 
     collectgarbage()
     collectgarbage()
@@ -835,122 +727,16 @@ for i = 1, n_iter do
 
 
     if cmd_params.vis then
-        local _pred_z_img = torch.Tensor(1,480,640)
-        local _rgb_img = torch.Tensor(3,480,640)            
-        local _normal_rgb = torch.Tensor(3,480,640)
-        local _output_img = torch.Tensor(3, 480,640 * 5)
+        local _pred_z_img = torch.Tensor(1, 256,256)
+        local _normal_rgb = torch.Tensor(3, 256,256)
 
         -- predicted depth
         _pred_z_img:copy(orig_size_pred_z:double())
-        _pred_z_img = _pred_z_img:add( - torch.min(_pred_z_img) )
-        _pred_z_img = _pred_z_img:div( torch.max(_pred_z_img:sub(1,-1, 20, 480 - 20, 20, 640 - 20)) )
-        
+        _normal_rgb:copy(image.scale(normal_image:double(), 256, 256))          
 
-        _output_img[{1,{1,480},{640 + 1,640 * 2}}]:copy(_pred_z_img)
-        _output_img[{2,{1,480},{640 + 1,640 * 2}}]:copy(_pred_z_img)
-        _output_img[{3,{1,480},{640 + 1,640 * 2}}]:copy(_pred_z_img)
+		torch.save(string.gsub(string.gsub(data_handle[i].img_filename, '.png', '.t7'), 'color', 'depth_pred'), _pred_z_img)
+		torch.save(string.gsub(string.gsub(data_handle[i].img_filename, '.png', '.t7'), 'color', 'normal_pred'), _normal_rgb)
 
-        -- rgb
-        _rgb_img:copy(image.scale(image.load(data_handle[i].img_filename), 640, 480)) 
-        _output_img[{{1},{1,480},{1,640}}]:copy(_rgb_img[{1,{}}])
-        _output_img[{{2},{1,480},{1,640}}]:copy(_rgb_img[{2,{}}])
-        _output_img[{{3},{1,480},{1,640}}]:copy(_rgb_img[{3,{}}])
-
-                    
-        -- the normal map  
-        _normal_rgb:copy(image.scale(normal_image:double(), 640, 480) )          
-        _normal_rgb:add(1)
-        _normal_rgb:div(2)
-        _output_img:sub(1,-1, 1,-1, 2 * 640 + 1, 3 * 640):copy(_normal_rgb)
-
-        
-
-        -- the groundtruth depth
-        local _gtz_img = gtz:clone()
-        _gtz_img = _gtz_img:add( - torch.min(_gtz_img) )
-        _gtz_img = _gtz_img:div( torch.max(_gtz_img:sub(20, 480 - 20, 20, 640 - 20)) )
-        _output_img[{1,{1,480},{3 * 640 + 1,640 * 4}}]:copy(_gtz_img)
-        _output_img[{2,{1,480},{3 * 640 + 1,640 * 4}}]:copy(_gtz_img)
-        _output_img[{3,{1,480},{3 * 640 + 1,640 * 4}}]:copy(_gtz_img)
-
-        _output_img[{{},{},{4 * 640 + 1,640 * 5}}]:copy(torch.add(gt_normal,1):div(2))
-        
-        image.save(cmd_params.output_folder.. '/' .. i .. '.png', _output_img)  
-        -- image.save(cmd_params.output_folder.. '/' .. i .. '_predicted_z.png', _pred_z_img)  
-        -- image.save(cmd_params.output_folder.. '/' .. i .. '_gt_z.png', _gtz_img)  
-        -- print("done")
-        -- io.read()
-
-        if cmd_params.mesh then
-
-            save_mesh(cmd_params.output_folder.. '/' .. i .. '.obj', world_coord)
-
-            local _dummy = torch.Tensor(1,1,network_input_height, network_input_width)
-            _dummy[{1,1,{}}]:copy(image.scale(gtz, network_input_width, network_input_height))
-            local world_coord_gt = depth_to_world_coord_network:forward(_dummy)
-            save_mesh(cmd_params.output_folder.. '/' .. i .. '_gt.obj', world_coord_gt)
-        end
     end
 end
 
-
--- get averaged WKDR and so on 
-WKDR = torch.mean(WKDR,1)
-WKDR_eq = torch.mean(WKDR_eq,1)
-WKDR_neq = torch.mean(WKDR_neq,1)
-overall_summary = torch.Tensor(n_thresh, 4)
-
-
--- find the best threshold according to our criteria
-min_max = 100;
-min_max_i = 1;
-for i = 1 , n_thresh do
-    overall_summary[{i,1}] = thresh[i]
-    overall_summary[{i,2}] = WKDR[{1,i}]
-    overall_summary[{i,3}] = WKDR_eq[{1,i}]
-    overall_summary[{i,4}] = WKDR_neq[{1,i}]
-    if math.max(WKDR_eq[{1,i}], WKDR_neq[{1,i}]) < min_max then
-        min_max = math.max(WKDR_eq[{1,i}], WKDR_neq[{1,i}])
-        min_max_i = i;
-    end
-end
-
-
--- print the final output
-print(overall_summary)
-print("====================================================================")
-if min_max_i > 1 then
-    if min_max_i < n_thresh then
-        print(overall_summary[{{min_max_i-1,min_max_i+1},{}}])
-    end
-end
-
-print("====================================================================")
-print(string.format('rmse:\t%f',math.sqrt(torch.mean(fmse))))
-print(string.format('rmse_si_img:%f',math.sqrt(torch.mean(fmse_si_img))))
-print(string.format('rmselog:%f',math.sqrt(torch.mean(fmselog))))
-print(string.format('lsi:\t%f',math.sqrt(torch.mean(flsi))))
-print(string.format('absrel:\t%f',torch.mean(fabsrel)))
-print(string.format('sqrrel:\t%f',torch.mean(fsqrrel)))
-
-
-
-
-if cmd_params.mode == 'test' then
-    local total_pixels = 0
-    local dn = 'normal'
-    for name in pairs(measures[dn][1]) do
-        average[dn][name] = 0
-    end
-
-    for i, m in pairs(measures[dn]) do
-        total_pixels = total_pixels + n_pixels[i]
-        for k in pairs(m) do
-            average[dn][k] = average[dn][k] + m[k] * n_pixels[i]
-        end
-    end
-    for k in pairs(average[dn]) do
-        average[dn][k] = average[dn][k] / total_pixels
-    end
-    print(average)
-end

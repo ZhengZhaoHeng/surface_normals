@@ -1,0 +1,5 @@
+data/
+*.jpg
+src/*/img_files/
+src/results
+src/locks
